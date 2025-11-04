@@ -10,30 +10,30 @@ import (
 )
 
 func StartDeadlineWorker() {
-	log.Println("⏳ Worker de prazos iniciado")
+	log.Println("Deadline worker started, waiting for tasks...")
 
 	for {
 		result, err := cache.RDB.BRPop(cache.Ctx, 0, "deadline_alerts").Result()
 		if err != nil {
-			log.Println("Erro ao buscar da fila:", err)
+			log.Println("Error retrieving task from Redis:", err)
 			continue
 		}
 
 		var task model.Task
 		if err := json.Unmarshal([]byte(result[1]), &task); err != nil {
-			log.Println("Erro ao decodificar tarefa:", err)
+			log.Println("Error unmarshaling task:", err)
 			continue
 		}
 
-		subject := "🔔 Sua tarefa está perto do prazo!"
+		subject := "🔔 Sua tarefa está perto do prazo!! 🔔"
 		body := "Olá " + task.Owner + ",\n\nA tarefa '" + task.Title + "' vence em " +
 			task.Deadline.Format("02/01/2006 15:04") + ".\n\nNão se esqueça de concluí-la!"
 
 		to := mapUserToEmail(task.Owner)
 		if err := email.Send(to, subject, body); err != nil {
-			log.Println("Erro ao enviar e-mail:", err)
+			log.Println("Error sending email:", err)
 		} else {
-			log.Printf("✅ E-mail enviado para %s sobre tarefa '%s'", to, task.Title)
+			log.Printf("Alert email sent to %s for task ID %d\n", to, task.ID)
 		}
 	}
 }

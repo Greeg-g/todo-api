@@ -17,7 +17,7 @@ func EnqueueUpcomingDeadlines() {
 	soon := now.Add(time.Hour)
 
 	if err := database.DB.Where("deadline BETWEEN ? AND ? AND completed = false", now, soon).Find(&tasks).Error; err != nil {
-		log.Println("Erro ao buscar tarefas próximas:", err)
+		log.Println("Error retrieving upcoming deadlines:", err)
 		return
 	}
 
