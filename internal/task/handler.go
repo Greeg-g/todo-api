@@ -1,15 +1,19 @@
 package task
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Greeg-g/todo-api/internal/cache"
+	"github.com/Greeg-g/todo-api/internal/database"
+	"github.com/Greeg-g/todo-api/internal/model"
 	"github.com/gin-gonic/gin"
 )
 
-var tasks = []Task{}
+var tasks = []model.Task{}
 
 func RegisterRoutes(r *gin.Engine) {
 	taskGroup := r.Group("/tasks")
@@ -23,24 +27,33 @@ func RegisterRoutes(r *gin.Engine) {
 		taskGroup.GET("/shared/:user", getSharedTasks)
 		taskGroup.GET("/recent", getRecentTasks)
 		taskGroup.GET("/owner/:owner", getTasksByOwner)
+		taskGroup.GET("check-deadlines", checkDeadlines)
 	}
 }
 
 func getAllTasks(c *gin.Context) {
+	var tasks []model.Task
+	if err := database.DB.Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
+		return
+	}
 	c.JSON(http.StatusOK, tasks)
 }
 
 func createTask(c *gin.Context) {
-	var newTask Task
+	var newTask model.Task
 	err := c.ShouldBindJSON(&newTask)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	newTask.ID = getNextID()
 	newTask.CreatedAt = time.Now()
-	tasks = append(tasks, newTask)
+	if err := database.DB.Create(&newTask).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
+		return
+	}
+
 	c.JSON(http.StatusCreated, newTask)
 }
 
@@ -52,18 +65,19 @@ func completeTask(c *gin.Context) {
 		return
 	}
 
-	for i, task := range tasks {
-		if task.ID == id {
-			if task.Completed {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Task already completed"})
-				return
-			}
-			tasks[i].Completed = true
-			c.JSON(http.StatusOK, tasks[i])
-			return
-		}
+	var task model.Task
+	if err := database.DB.First(&task, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
 	}
-	c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+
+	task.Completed = true
+	if err := database.DB.Save(&task).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task"})
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
 }
 
 func deleteTask(c *gin.Context) {
@@ -73,25 +87,22 @@ func deleteTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
-	for i, task := range tasks {
-		if task.ID == id {
-			tasks = append(tasks[:i], tasks[i+1:]...)
-			c.JSON(http.StatusOK, gin.H{"message": "Task deleted"})
-			return
-		}
+	if err := database.DB.Delete(&model.Task{}, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete task"})
+		return
 	}
-	c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+	c.JSON(http.StatusOK, gin.H{"message": "Task deleted"})
 }
 
 func getCategoryTasks(c *gin.Context) {
 	category := c.Param("category")
-	var categoryTasks []Task
-	for _, task := range tasks {
-		if strings.EqualFold(task.Category, category) {
-			categoryTasks = append(categoryTasks, task)
-		}
+
+	if err := database.DB.Where("LOWER(category) = LOWER(?)", category).Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
+		return
 	}
-	c.JSON(http.StatusOK, categoryTasks)
+
+	c.JSON(http.StatusOK, tasks)
 }
 
 func shareTask(c *gin.Context) {
@@ -111,87 +122,80 @@ func shareTask(c *gin.Context) {
 		return
 	}
 
-	for i, task := range tasks {
-		if task.ID == id {
-			for _, user := range tasks[i].SharedWith {
-				if user == req.User {
-					c.JSON(http.StatusConflict, gin.H{"error": "Task already shared with this user"})
-					return
-				}
-			}
-			tasks[i].SharedWith = append(tasks[i].SharedWith, req.User)
-			c.JSON(http.StatusOK, tasks[i])
+	var task model.Task
+	if err := database.DB.First(&task, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+
+	if task.Owner == req.User {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Owner cannot be added to shared_with"})
+		return
+	}
+
+	for _, user := range task.SharedWith {
+		if strings.EqualFold(user, req.User) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "User already has access to this task"})
 			return
 		}
 	}
-	c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+
+	task.SharedWith = append(task.SharedWith, req.User)
+	if err := database.DB.Save(&task).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share task"})
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
 }
 
 func getSharedTasks(c *gin.Context) {
 	user := c.Param("user")
-	var shared []Task
-	for _, task := range tasks {
-		for _, u := range task.SharedWith {
-			if strings.EqualFold(u, user) {
-				shared = append(shared, task)
-				break
-			}
-		}
+	var tasks []model.Task
+
+	err := database.DB.Where("? = ANY (shared_with)", user).Find(&tasks).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
+		return
 	}
-	if len(shared) == 0 {
+
+	if len(tasks) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No tasks shared with this user"})
 	}
-	c.JSON(http.StatusOK, shared)
-}
 
-func getRecentTasks(c *gin.Context) {
-	minutesStr := c.Query("minutes")
-	if minutesStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Minutes query parameter is required"})
-		return
-	}
-
-	minutes, err := strconv.Atoi(minutesStr)
-	if err != nil || minutes <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid minutes parameter"})
-		return
-	}
-
-	timeLimit := time.Now().Add(-time.Duration(minutes) * time.Minute)
-	var recentTasks []Task
-	for _, task := range tasks {
-		if task.CreatedAt.After(timeLimit) {
-			recentTasks = append(recentTasks, task)
-		}
-	}
-	if len(recentTasks) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No recent tasks found"})
-		return
-	}
-	c.JSON(http.StatusOK, recentTasks)
+	c.JSON(http.StatusOK, tasks)
 }
 
 func getTasksByOwner(c *gin.Context) {
 	owner := c.Param("owner")
-	var ownerTasks []Task
-	for _, task := range tasks {
-		if strings.EqualFold(task.Owner, owner) {
-			ownerTasks = append(ownerTasks, task)
-		}
-	}
-	if len(ownerTasks) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No tasks found for this owner"})
+	var tasks []model.Task
+	if err := database.DB.Where("LOWER(owner) = LOWER(?)", owner).Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
 		return
 	}
-	c.JSON(http.StatusOK, ownerTasks)
+	c.JSON(http.StatusOK, tasks)
 }
 
-func getNextID() int64 {
-	var maxID int64 = 0
-	for _, task := range tasks {
-		if task.ID > maxID {
-			maxID = task.ID
-		}
+func getRecentTasks(c *gin.Context) {
+	val, err := cache.RDB.Get(cache.Ctx, "recent_tasks").Result()
+	if err == nil {
+		c.Data(http.StatusOK, "application/json", []byte(val))
+		return
 	}
-	return maxID + 1
+
+	var tasks []model.Task
+	if err := database.DB.Order("created_at desc").Limit(10).Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
+		return
+	}
+
+	jsonData, _ := json.Marshal(tasks)
+	cache.RDB.Set(cache.Ctx, "recent_tasks", jsonData, time.Minute*10)
+
+	c.JSON(http.StatusOK, tasks)
+}
+
+func checkDeadlines(c *gin.Context) {
+	go EnqueueUpcomingDeadlines()
+	c.JSON(http.StatusOK, gin.H{"message": "Deadline check initiated"})
 }

@@ -1,6 +1,7 @@
-package router
+package routes
 
 import (
+	"github.com/Greeg-g/todo-api/internal/cache"
 	"github.com/Greeg-g/todo-api/internal/task"
 	"github.com/gin-gonic/gin"
 )
@@ -13,4 +14,5 @@ func SetupRoutes(r *gin.Engine) {
 	})
 
 	task.RegisterRoutes(r)
+	cache.RegisterRoutes(r)
 }
