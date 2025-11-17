@@ -11,6 +11,7 @@ import (
 
 var DB *gorm.DB
 
+// Connects to the PostgreSQL database with retries
 func Connect() {
 	dsn := "host=db user=postgres password=postgres dbname=tododb port=5432 sslmode=disable"
 

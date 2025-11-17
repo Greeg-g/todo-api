@@ -11,6 +11,7 @@ import (
 var RDB *redis.Client
 var Ctx = context.Background()
 
+// Connects to Redis and initializes the client
 func Connect() {
 	RDB = redis.NewClient(&redis.Options{
 		Addr:     os.Getenv("REDIS_HOST") + ":6379",

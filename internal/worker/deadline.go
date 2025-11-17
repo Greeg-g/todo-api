@@ -9,6 +9,7 @@ import (
 	"github.com/Greeg-g/todo-api/internal/model"
 )
 
+// Listens for deadline alerts and sends email notifications
 func StartDeadlineWorker() {
 	log.Println("Deadline worker started, waiting for tasks...")
 
@@ -38,6 +39,7 @@ func StartDeadlineWorker() {
 	}
 }
 
+// Maps a username to an email address
 func mapUserToEmail(username string) string {
 	switch username {
 	case "greg":

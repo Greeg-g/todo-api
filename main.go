@@ -15,6 +15,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// Main entry point for the API server
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using environment variables")
@@ -39,6 +40,7 @@ func main() {
 	}
 }
 
+// Starts the cron scheduler for periodic deadline checks
 func startScheduler() {
 	c := cron.New()
 	c.AddFunc("@every 5m", func() {
