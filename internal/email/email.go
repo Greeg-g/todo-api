@@ -6,6 +6,7 @@ import (
 	"os"
 )
 
+// Sends an email using SMTP credentials
 func Send(to, subject, body string) error {
 	from := os.Getenv("SMTP_USER")
 	pass := os.Getenv("SMTP_PASS")

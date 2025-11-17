@@ -15,6 +15,7 @@ import (
 
 var tasks = []model.Task{}
 
+// Registers task-related routes in Gin
 func RegisterRoutes(r *gin.Engine) {
 	taskGroup := r.Group("/tasks")
 	{
@@ -31,6 +32,7 @@ func RegisterRoutes(r *gin.Engine) {
 	}
 }
 
+// Retrieves all tasks from the database
 func getAllTasks(c *gin.Context) {
 	var tasks []model.Task
 	if err := database.DB.Find(&tasks).Error; err != nil {
@@ -40,6 +42,7 @@ func getAllTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
+// Creates a new task in the database
 func createTask(c *gin.Context) {
 	var newTask model.Task
 	err := c.ShouldBindJSON(&newTask)
@@ -57,6 +60,7 @@ func createTask(c *gin.Context) {
 	c.JSON(http.StatusCreated, newTask)
 }
 
+// Marks a task as completed in the database
 func completeTask(c *gin.Context) {
 	idParam := c.Param("id")
 	id, err := strconv.ParseInt(idParam, 10, 64)
@@ -80,6 +84,7 @@ func completeTask(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
+// Deletes a task from the database by ID
 func deleteTask(c *gin.Context) {
 	idParam := c.Param("id")
 	id, err := strconv.ParseInt(idParam, 10, 64)
@@ -94,6 +99,7 @@ func deleteTask(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Task deleted"})
 }
 
+// Retrieves tasks by category from the database
 func getCategoryTasks(c *gin.Context) {
 	category := c.Param("category")
 
@@ -105,6 +111,7 @@ func getCategoryTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
+// Shares a task with another user
 func shareTask(c *gin.Context) {
 	idParam := c.Param("id")
 	id, err := strconv.ParseInt(idParam, 10, 64)
@@ -149,6 +156,7 @@ func shareTask(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
+// Retrieves tasks shared with a specific user
 func getSharedTasks(c *gin.Context) {
 	user := c.Param("user")
 	var tasks []model.Task
@@ -166,6 +174,7 @@ func getSharedTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
+// Retrieves tasks by owner from the database
 func getTasksByOwner(c *gin.Context) {
 	owner := c.Param("owner")
 	var tasks []model.Task
@@ -176,6 +185,7 @@ func getTasksByOwner(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
+// Retrieves the most recent tasks, cached if available
 func getRecentTasks(c *gin.Context) {
 	val, err := cache.RDB.Get(cache.Ctx, "recent_tasks").Result()
 	if err == nil {
@@ -195,6 +205,7 @@ func getRecentTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
+// Triggers deadline check for upcoming tasks
 func checkDeadlines(c *gin.Context) {
 	go EnqueueUpcomingDeadlines()
 	c.JSON(http.StatusOK, gin.H{"message": "Deadline check initiated"})

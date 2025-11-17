@@ -10,6 +10,7 @@ import (
 	"github.com/Greeg-g/todo-api/internal/model"
 )
 
+// Enqueues tasks with upcoming deadlines into Redis for alerts
 func EnqueueUpcomingDeadlines() {
 	var tasks []model.Task
 	loc, _ := time.LoadLocation("America/Sao_Paulo")
