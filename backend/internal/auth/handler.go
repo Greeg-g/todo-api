@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Greeg-g/todo-api/internal/database"
@@ -28,7 +29,23 @@ func RegisterRoutes(r *gin.Engine) {
 	{
 		auth.POST("/register", Register)
 		auth.POST("/login", Login)
+		auth.GET("/me", JWTMiddleware(), Me)
 	}
+}
+
+// Me retorna dados do usuário autenticado
+func Me(c *gin.Context) {
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
+	c.JSON(http.StatusOK, gin.H{
+		"id":       user.ID,
+		"username": user.Username,
+		"email":    user.Email,
+	})
 }
 
 func Register(c *gin.Context) {
@@ -47,7 +64,7 @@ func Register(c *gin.Context) {
 
 	user := model.User{
 		Username:     req.Username,
-		Email:        req.Email,
+		Email:        strings.ToLower(strings.TrimSpace(req.Email)),
 		PasswordHash: string(hash),
 		CreatedAt:    time.Now(),
 	}
@@ -86,7 +103,7 @@ func Login(c *gin.Context) {
 
 		claims := jwt.MapClaims{
 			"user_id": user.ID,
-			"exp":     time.Now().Add(30 * time.Minute).Unix(),
+			"exp":     time.Now().Add(90 * time.Minute).Unix(),
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 		signed, err := token.SignedString([]byte(secret))
