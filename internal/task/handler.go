@@ -2,11 +2,13 @@ package task
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Greeg-g/todo-api/internal/auth"
 	"github.com/Greeg-g/todo-api/internal/cache"
 	"github.com/Greeg-g/todo-api/internal/database"
 	"github.com/Greeg-g/todo-api/internal/model"
@@ -15,9 +17,10 @@ import (
 
 var tasks = []model.Task{}
 
-// Registers task-related routes in Gin
+// RegisterRoutes registers task routes and applies JWT middleware to the group.
 func RegisterRoutes(r *gin.Engine) {
 	taskGroup := r.Group("/tasks")
+	taskGroup.Use(auth.JWTMiddleware())
 	{
 		taskGroup.GET("/", getAllTasks)
 		taskGroup.POST("/create", createTask)
@@ -25,42 +28,90 @@ func RegisterRoutes(r *gin.Engine) {
 		taskGroup.DELETE("/delete/:id", deleteTask)
 		taskGroup.GET("/category/:category", getCategoryTasks)
 		taskGroup.POST("/share/:id", shareTask)
-		taskGroup.GET("/shared/:user", getSharedTasks)
+		taskGroup.GET("/shared", getSharedTasks)
 		taskGroup.GET("/recent", getRecentTasks)
 		taskGroup.GET("/owner/:owner", getTasksByOwner)
 		taskGroup.GET("check-deadlines", checkDeadlines)
 	}
 }
 
-// Retrieves all tasks from the database
+// getAllTasks returns tasks owned by the authenticated user.
 func getAllTasks(c *gin.Context) {
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
+
 	var tasks []model.Task
-	if err := database.DB.Find(&tasks).Error; err != nil {
+	if err := database.DB.Where("owner = ?", user.Username).Find(&tasks).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
 		return
 	}
 	c.JSON(http.StatusOK, tasks)
 }
 
-// Creates a new task in the database
+// createTask creates a new task owned by the authenticated user.
 func createTask(c *gin.Context) {
 	var newTask model.Task
-	err := c.ShouldBindJSON(&newTask)
-	if err != nil {
+	if err := c.ShouldBindJSON(&newTask); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	newTask.Title = strings.TrimSpace(newTask.Title)
+	if newTask.Title == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Title is required"})
+		return
+	}
+	if len(newTask.Title) > 300 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Title too long (max 300 characters)"})
+		return
+	}
+	if len(newTask.Description) > 5000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Description too long (max 5000 characters)"})
+		return
+	}
+
+	if newTask.Deadline == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Deadline is required"})
+		return
+	}
+
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
+
+	newTask.Owner = user.Username
 	newTask.CreatedAt = time.Now()
+
+	// Store original deadline for response (before adjustment).
+	originalDeadline := newTask.Deadline
+
+	// Adjust deadline +3 hours to compensate for timezone offset in database storage.
+	adjustedDeadline := newTask.Deadline.Add(3 * time.Hour)
+	if adjustedDeadline.Before(time.Now()) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Deadline must be a future date/time"})
+		return
+	}
+	newTask.Deadline = &adjustedDeadline
+
 	if err := database.DB.Create(&newTask).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
 		return
 	}
 
+	// Return original deadline (without +3h adjustment) to user.
+	newTask.Deadline = originalDeadline
 	c.JSON(http.StatusCreated, newTask)
 }
 
-// Marks a task as completed in the database
+// completeTask marks a task as completed; only the owner or a user in SharedWith
+// is permitted to perform this action.
 func completeTask(c *gin.Context) {
 	idParam := c.Param("id")
 	id, err := strconv.ParseInt(idParam, 10, 64)
@@ -75,6 +126,29 @@ func completeTask(c *gin.Context) {
 		return
 	}
 
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
+
+	allowed := false
+	if strings.EqualFold(task.Owner, user.Username) {
+		allowed = true
+	} else {
+		for _, s := range task.SharedWith {
+			if strings.EqualFold(s, user.Username) {
+				allowed = true
+				break
+			}
+		}
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not allowed to complete this task"})
+		return
+	}
+
 	task.Completed = true
 	if err := database.DB.Save(&task).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task"})
@@ -84,7 +158,7 @@ func completeTask(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
-// Deletes a task from the database by ID
+// deleteTask removes a task by ID; only the owner is allowed to delete.
 func deleteTask(c *gin.Context) {
 	idParam := c.Param("id")
 	id, err := strconv.ParseInt(idParam, 10, 64)
@@ -92,6 +166,24 @@ func deleteTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
+	var task model.Task
+	if err := database.DB.First(&task, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
+
+	if !strings.EqualFold(task.Owner, user.Username) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only owner can delete this task"})
+		return
+	}
+
 	if err := database.DB.Delete(&model.Task{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete task"})
 		return
@@ -99,7 +191,7 @@ func deleteTask(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Task deleted"})
 }
 
-// Retrieves tasks by category from the database
+// getCategoryTasks returns tasks for the current user filtered by category.
 func getCategoryTasks(c *gin.Context) {
 	category := c.Param("category")
 
@@ -111,7 +203,7 @@ func getCategoryTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
-// Shares a task with another user
+// shareTask adds a target user (by username or email) to a task's SharedWith list.
 func shareTask(c *gin.Context) {
 	idParam := c.Param("id")
 	id, err := strconv.ParseInt(idParam, 10, 64)
@@ -135,8 +227,14 @@ func shareTask(c *gin.Context) {
 		return
 	}
 
+	var target model.User
+	if err := database.DB.Where("username = ? OR email = ?", req.User, req.User).First(&target).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Target user not found"})
+		return
+	}
+
 	if task.Owner == req.User {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Owner cannot be added to shared_with"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Owner already has access to the task"})
 		return
 	}
 
@@ -156,12 +254,17 @@ func shareTask(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
-// Retrieves tasks shared with a specific user
+// getSharedTasks returns tasks that have been shared with the authenticated user.
 func getSharedTasks(c *gin.Context) {
-	user := c.Param("user")
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
 	var tasks []model.Task
 
-	err := database.DB.Where("? = ANY (shared_with)", user).Find(&tasks).Error
+	err := database.DB.Where("? = ANY (shared_with)", user.Username).Find(&tasks).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
 		return
@@ -174,38 +277,76 @@ func getSharedTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
-// Retrieves tasks by owner from the database
+// getTasksByOwner returns tasks for the specified owner. If the requester is
+// the owner all tasks are returned; otherwise only tasks shared with the
+// requester are returned.
 func getTasksByOwner(c *gin.Context) {
 	owner := c.Param("owner")
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
+
 	var tasks []model.Task
 	if err := database.DB.Where("LOWER(owner) = LOWER(?)", owner).Find(&tasks).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
 		return
 	}
-	c.JSON(http.StatusOK, tasks)
+
+	if strings.EqualFold(owner, user.Username) {
+		c.JSON(http.StatusOK, tasks)
+		return
+	}
+
+	var filtered []model.Task
+	for _, t := range tasks {
+		for _, s := range t.SharedWith {
+			if strings.EqualFold(s, user.Username) {
+				filtered = append(filtered, t)
+				break
+			}
+		}
+	}
+
+	if len(filtered) == 0 {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not allowed to view these tasks"})
+		return
+	}
+	c.JSON(http.StatusOK, filtered)
 }
 
-// Retrieves the most recent tasks, cached if available
+// getRecentTasks returns the most recent tasks for the authenticated user,
+// using a per-user cache stored in Redis.
 func getRecentTasks(c *gin.Context) {
-	val, err := cache.RDB.Get(cache.Ctx, "recent_tasks").Result()
+	u, ok := c.Get("currentUser")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	user := u.(*model.User)
+
+	key := fmt.Sprintf("recent_tasks:%d", user.ID)
+	val, err := cache.RDB.Get(cache.Ctx, key).Result()
 	if err == nil {
 		c.Data(http.StatusOK, "application/json", []byte(val))
 		return
 	}
 
 	var tasks []model.Task
-	if err := database.DB.Order("created_at desc").Limit(10).Find(&tasks).Error; err != nil {
+	if err := database.DB.Where("owner = ?", user.Username).Order("created_at desc").Limit(10).Find(&tasks).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
 		return
 	}
 
 	jsonData, _ := json.Marshal(tasks)
-	cache.RDB.Set(cache.Ctx, "recent_tasks", jsonData, time.Minute*10)
+	cache.RDB.Set(cache.Ctx, key, jsonData, time.Minute*10)
 
 	c.JSON(http.StatusOK, tasks)
 }
 
-// Triggers deadline check for upcoming tasks
+// checkDeadlines triggers an asynchronous enqueue of upcoming task deadlines.
 func checkDeadlines(c *gin.Context) {
 	go EnqueueUpcomingDeadlines()
 	c.JSON(http.StatusOK, gin.H{"message": "Deadline check initiated"})

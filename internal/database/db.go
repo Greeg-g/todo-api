@@ -33,7 +33,7 @@ func Connect() {
 
 	DB = db
 
-	err = DB.AutoMigrate(&model.Task{})
+	err = DB.AutoMigrate(&model.Task{}, &model.User{})
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}

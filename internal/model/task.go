@@ -14,6 +14,6 @@ type Task struct {
 	Completed   bool           `json:"completed"`
 	SharedWith  pq.StringArray `json:"shared_with" gorm:"type:text[]"`
 	CreatedAt   time.Time      `json:"created_at"`
-	Deadline    time.Time      `json:"deadline"`
+	Deadline    *time.Time     `json:"deadline" gorm:"type:timestamptz;default:NULL"`
 	Owner       string         `json:"owner"`
 }
