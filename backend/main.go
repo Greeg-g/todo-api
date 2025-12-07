@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 
+	"github.com/gin-contrib/cors"
+
 	"github.com/Greeg-g/todo-api/internal/cache"
 	"github.com/Greeg-g/todo-api/internal/database"
 	"github.com/Greeg-g/todo-api/internal/routes"
@@ -32,6 +34,16 @@ func main() {
 	startScheduler()
 
 	r := gin.Default()
+
+	// Permitir CORS para o frontend em localhost:3000
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * 60 * 60,
+	}))
 	routes.SetupRoutes(r)
 
 	err := r.Run(":8080")

@@ -228,7 +228,8 @@ func shareTask(c *gin.Context) {
 	}
 
 	var target model.User
-	if err := database.DB.Where("username = ? OR email = ?", req.User, req.User).First(&target).Error; err != nil {
+	userParam := strings.ToLower(strings.TrimSpace(req.User))
+	if err := database.DB.Where("LOWER(username) = ? OR LOWER(email) = ?", userParam, userParam).First(&target).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Target user not found"})
 		return
 	}
