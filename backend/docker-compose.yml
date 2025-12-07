@@ -33,6 +33,20 @@ services:
     ports:
       - "6379:6379"
 
+  frontend:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ../frontend:/app:delegated
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install --silent && npm run dev -- --host 0.0.0.0"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - api
+
 volumes:
   pgdata:
 
