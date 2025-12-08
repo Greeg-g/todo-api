@@ -89,24 +89,16 @@ func createTask(c *gin.Context) {
 	newTask.Owner = user.Username
 	newTask.CreatedAt = time.Now()
 
-	// Store original deadline for response (before adjustment).
-	originalDeadline := newTask.Deadline
-
-	// Adjust deadline +3 hours to compensate for timezone offset in database storage.
-	adjustedDeadline := newTask.Deadline.Add(3 * time.Hour)
-	if adjustedDeadline.Before(time.Now()) {
+	if newTask.Deadline.Before(time.Now()) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Deadline must be a future date/time"})
 		return
 	}
-	newTask.Deadline = &adjustedDeadline
 
 	if err := database.DB.Create(&newTask).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
 		return
 	}
 
-	// Return original deadline (without +3h adjustment) to user.
-	newTask.Deadline = originalDeadline
 	c.JSON(http.StatusCreated, newTask)
 }
 

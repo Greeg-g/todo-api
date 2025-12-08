@@ -1,0 +1,8 @@
+# Ignorar arquivos de cache e build do Vite
+frontend/.vite/
+# Ignorar dependências do Node
+frontend/node_modules/
+# Ignorar arquivos de build
+frontend/dist/
+# Ignorar arquivos do sistema
+*.DS_Store
